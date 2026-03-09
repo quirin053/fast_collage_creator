@@ -1,30 +1,84 @@
 """
-Top settings bar: canvas dimensions, gap size, background colour, export.
+Top settings bar: aspect ratio, gap size, background colour, undo/redo/save/load/export.
+
+The canvas `CanvasSettings` still stores width/height for the workspace preview
+(auto-computed from aspect ratio at a fixed preview resolution).
+Actual export resolution is configured inside the export dialog.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QCheckBox, QColorDialog, QComboBox, QHBoxLayout, QLabel,
+    QColorDialog, QComboBox, QHBoxLayout, QLabel,
     QPushButton, QSpinBox, QToolButton, QWidget,
 )
 
 
+# ---------------------------------------------------------------------------
+# Preview resolution: the long side of the workspace canvas (px)
+# ---------------------------------------------------------------------------
+_PREVIEW_LONG_SIDE = 1920
+
+
+def _compute_preview_size(aw: int, ah: int) -> tuple[int, int]:
+    """Return (width, height) for the preview canvas at _PREVIEW_LONG_SIDE."""
+    if aw <= 0 or ah <= 0:
+        return _PREVIEW_LONG_SIDE, _PREVIEW_LONG_SIDE
+    if aw >= ah:
+        w = _PREVIEW_LONG_SIDE
+        h = max(1, round(w * ah / aw))
+    else:
+        h = _PREVIEW_LONG_SIDE
+        w = max(1, round(h * aw / ah))
+    return w, h
+
+
+# ---------------------------------------------------------------------------
+# Aspect ratio presets  (label → (aspect_w, aspect_h))
+# ---------------------------------------------------------------------------
+_ASPECT_PRESETS: dict[str, tuple[int, int]] = {
+    "16 : 9":           (16, 9),
+    "4 : 3":            (4, 3),
+    "3 : 2":            (3, 2),
+    "1 : 1  (Square)":  (1, 1),
+    "4 : 5":            (4, 5),
+    "9 : 16":           (9, 16),
+    "3 : 4":            (3, 4),
+    "A4  Portrait":     (210, 297),
+    "A4  Landscape":    (297, 210),
+    "Custom":           (0, 0),
+}
+_DEFAULT_PRESET = "16 : 9"
+
+
 @dataclass
 class CanvasSettings:
-    width: int = 1920
-    height: int = 1080
-    gap_px: int = 8          # gap between cells in the exported image
-    background: QColor = None  # colour shown behind cells / in gaps
-    border_width_ui: int = 4  # hit-width of draggable borders in the UI
-    transparent_bg: bool = False  # export with transparent background
+    # Aspect ratio (used by export dialog and workspace layout)
+    aspect_w: int = 16
+    aspect_h: int = 9
+    # Preview dimensions (auto-derived; workspace uses these for rendering)
+    width: int = field(init=False)
+    height: int = field(init=False)
+    # Gap between cells in the exported image (px)
+    gap_px: int = 8
+    # Background colour and hit-width of draggable borders
+    background: QColor = None
+    border_width_ui: int = 4
+    # transparent_bg kept for backward compat with save/load
+    transparent_bg: bool = False
 
     def __post_init__(self):
         if self.background is None:
             self.background = QColor("#ffffff")
+        self.width, self.height = _compute_preview_size(self.aspect_w, self.aspect_h)
+
+    def set_aspect(self, aw: int, ah: int) -> None:
+        self.aspect_w = max(1, aw)
+        self.aspect_h = max(1, ah)
+        self.width, self.height = _compute_preview_size(self.aspect_w, self.aspect_h)
 
 
 class SettingsBar(QWidget):
@@ -32,29 +86,19 @@ class SettingsBar(QWidget):
 
     settings_changed = Signal(CanvasSettings)
     export_requested = Signal()
-    save_requested = Signal()
-    load_requested = Signal()
-    undo_requested = Signal()
-    redo_requested = Signal()
-
-    # Common presets (label → (w, h))
-    _PRESETS: dict[str, tuple[int, int]] = {
-        "Custom": (0, 0),
-        "Full HD  1920×1080": (1920, 1080),
-        "4K       3840×2160": (3840, 2160),
-        "Square   2000×2000": (2000, 2000),
-        "A4 300dpi 2480×3508": (2480, 3508),
-        "Instagram 1:1 1080×1080": (1080, 1080),
-        "Instagram 4:5 1080×1350": (1080, 1350),
-        "Instagram 16:9 1080×608": (1080, 608),
-    }
+    save_requested   = Signal()
+    load_requested   = Signal()
+    undo_requested   = Signal()
+    redo_requested   = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._settings = CanvasSettings()
-        self._building = False
+        self._building  = False
         self._build_ui()
 
+    # ------------------------------------------------------------------
+    # Build
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
@@ -63,33 +107,40 @@ class SettingsBar(QWidget):
         layout.setContentsMargins(6, 4, 6, 4)
         layout.setSpacing(8)
 
-        # Preset combo
-        layout.addWidget(QLabel("Preset:"))
-        self._preset_combo = QComboBox()
-        for label in self._PRESETS:
-            self._preset_combo.addItem(label)
-        self._preset_combo.setCurrentIndex(1)  # Full HD default
-        self._preset_combo.currentIndexChanged.connect(self._on_preset)
-        layout.addWidget(self._preset_combo)
+        # ---- Aspect-ratio preset combo ----------------------------
+        layout.addWidget(QLabel("Aspect:"))
+        self._aspect_combo = QComboBox()
+        for label in _ASPECT_PRESETS:
+            self._aspect_combo.addItem(label)
+        self._aspect_combo.setCurrentText(_DEFAULT_PRESET)
+        self._aspect_combo.currentTextChanged.connect(self._on_aspect_preset)
+        layout.addWidget(self._aspect_combo)
 
-        # Width / Height
-        layout.addWidget(QLabel("W:"))
-        self._w_spin = QSpinBox()
-        self._w_spin.setRange(100, 99999)
-        self._w_spin.setValue(self._settings.width)
-        self._w_spin.setSuffix(" px")
-        self._w_spin.valueChanged.connect(self._on_change)
-        layout.addWidget(self._w_spin)
+        # ---- Custom ratio spinboxes (hidden when preset != Custom) ----
+        self._wh_label = QLabel("W:H")
+        layout.addWidget(self._wh_label)
 
-        layout.addWidget(QLabel("H:"))
-        self._h_spin = QSpinBox()
-        self._h_spin.setRange(100, 99999)
-        self._h_spin.setValue(self._settings.height)
-        self._h_spin.setSuffix(" px")
-        self._h_spin.valueChanged.connect(self._on_change)
-        layout.addWidget(self._h_spin)
+        self._aw_spin = QSpinBox()
+        self._aw_spin.setRange(1, 9999)
+        self._aw_spin.setValue(self._settings.aspect_w)
+        self._aw_spin.setFixedWidth(56)
+        self._aw_spin.valueChanged.connect(self._on_custom_ratio)
+        layout.addWidget(self._aw_spin)
 
-        # Gap
+        self._colon_label = QLabel(":")
+        layout.addWidget(self._colon_label)
+
+        self._ah_spin = QSpinBox()
+        self._ah_spin.setRange(1, 9999)
+        self._ah_spin.setValue(self._settings.aspect_h)
+        self._ah_spin.setFixedWidth(56)
+        self._ah_spin.valueChanged.connect(self._on_custom_ratio)
+        layout.addWidget(self._ah_spin)
+
+        # Hide custom inputs initially (16:9 is the default)
+        self._set_custom_visible(False)
+
+        # ---- Gap --------------------------------------------------
         layout.addWidget(QLabel("Gap:"))
         self._gap_spin = QSpinBox()
         self._gap_spin.setRange(0, 200)
@@ -98,7 +149,7 @@ class SettingsBar(QWidget):
         self._gap_spin.valueChanged.connect(self._on_change)
         layout.addWidget(self._gap_spin)
 
-        # Background colour
+        # ---- Background colour ------------------------------------
         layout.addWidget(QLabel("BG:"))
         self._bg_btn = QToolButton()
         self._bg_btn.setFixedSize(28, 24)
@@ -106,18 +157,9 @@ class SettingsBar(QWidget):
         self._bg_btn.clicked.connect(self._pick_bg)
         layout.addWidget(self._bg_btn)
 
-        # Transparent background checkbox
-        self._transp_cb = QCheckBox("Transparent")
-        self._transp_cb.setToolTip(
-            "Export with transparent background (PNG / WebP only).\n"
-            "Unsupported formats fall back to the colour above."
-        )
-        self._transp_cb.stateChanged.connect(self._on_change)
-        layout.addWidget(self._transp_cb)
-
         layout.addStretch()
 
-        # Undo / Redo
+        # ---- Undo / Redo ------------------------------------------
         undo_btn = QPushButton("↩ Undo")
         undo_btn.clicked.connect(self.undo_requested)
         layout.addWidget(undo_btn)
@@ -125,7 +167,7 @@ class SettingsBar(QWidget):
         redo_btn.clicked.connect(self.redo_requested)
         layout.addWidget(redo_btn)
 
-        # Save / Load
+        # ---- Save / Load ------------------------------------------
         save_btn = QPushButton("💾 Save")
         save_btn.clicked.connect(self.save_requested)
         layout.addWidget(save_btn)
@@ -133,7 +175,7 @@ class SettingsBar(QWidget):
         load_btn.clicked.connect(self.load_requested)
         layout.addWidget(load_btn)
 
-        # Export
+        # ---- Export -----------------------------------------------
         export_btn = QPushButton("⬇ Export")
         export_btn.setStyleSheet(
             "QPushButton { background: #2d8a4e; color: white; "
@@ -146,6 +188,12 @@ class SettingsBar(QWidget):
         self._building = False
 
     # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _set_custom_visible(self, visible: bool) -> None:
+        for w in (self._wh_label, self._aw_spin, self._colon_label, self._ah_spin):
+            w.setVisible(visible)
 
     def settings(self) -> CanvasSettings:
         return self._settings
@@ -157,26 +205,36 @@ class SettingsBar(QWidget):
         )
         self._bg_btn.setToolTip(f"Background colour: {c.name()}")
 
-    def _on_preset(self) -> None:
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
+
+    def _on_aspect_preset(self, label: str) -> None:
         if self._building:
             return
-        label = self._preset_combo.currentText()
-        w, h = self._PRESETS[label]
-        if w == 0:
-            return  # Custom – leave spinboxes as-is
+        aw, ah = _ASPECT_PRESETS.get(label, (0, 0))
+        is_custom = (aw == 0)
+        self._set_custom_visible(is_custom)
+        if is_custom:
+            self._on_custom_ratio()
+            return
         self._building = True
-        self._w_spin.setValue(w)
-        self._h_spin.setValue(h)
+        self._aw_spin.setValue(aw)
+        self._ah_spin.setValue(ah)
         self._building = False
-        self._on_change()
+        self._settings.set_aspect(aw, ah)
+        self.settings_changed.emit(self._settings)
+
+    def _on_custom_ratio(self) -> None:
+        if self._building:
+            return
+        self._settings.set_aspect(self._aw_spin.value(), self._ah_spin.value())
+        self.settings_changed.emit(self._settings)
 
     def _on_change(self) -> None:
         if self._building:
             return
-        self._settings.width = self._w_spin.value()
-        self._settings.height = self._h_spin.value()
         self._settings.gap_px = self._gap_spin.value()
-        self._settings.transparent_bg = self._transp_cb.isChecked()
         self.settings_changed.emit(self._settings)
 
     def _pick_bg(self) -> None:
@@ -187,3 +245,41 @@ class SettingsBar(QWidget):
             self._settings.background = colour
             self._update_bg_btn()
             self.settings_changed.emit(self._settings)
+
+    # ------------------------------------------------------------------
+    # Programmatic update (e.g. after loading a project)
+    # ------------------------------------------------------------------
+
+    def apply_settings(self, cs: "CanvasSettings") -> None:
+        """Sync the settings bar UI to the given CanvasSettings."""
+        from math import gcd
+        self._building = True
+        try:
+            # Find a matching preset by reducing the aspect ratio with GCD
+            g = gcd(cs.aspect_w, cs.aspect_h)
+            aw, ah = cs.aspect_w // g, cs.aspect_h // g
+            matched_label: str | None = None
+            for label, (pw, ph) in _ASPECT_PRESETS.items():
+                if pw == 0:
+                    continue
+                pg = gcd(pw, ph)
+                if pw // pg == aw and ph // pg == ah:
+                    matched_label = label
+                    break
+            if matched_label:
+                self._aspect_combo.setCurrentText(matched_label)
+                self._set_custom_visible(False)
+            else:
+                self._aspect_combo.setCurrentText("Custom")
+                self._aw_spin.setValue(cs.aspect_w)
+                self._ah_spin.setValue(cs.aspect_h)
+                self._set_custom_visible(True)
+
+            self._gap_spin.setValue(cs.gap_px)
+            self._settings.aspect_w = cs.aspect_w
+            self._settings.aspect_h = cs.aspect_h
+            self._settings.gap_px   = cs.gap_px
+            self._settings.background = cs.background
+            self._update_bg_btn()
+        finally:
+            self._building = False

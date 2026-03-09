@@ -146,20 +146,34 @@ class CollageWorkspace(QWidget):
         return {
             "version": 1,
             "settings": {
-                "width": self._settings.width,
-                "height": self._settings.height,
-                "gap_px": self._settings.gap_px,
+                "aspect_w":  self._settings.aspect_w,
+                "aspect_h":  self._settings.aspect_h,
+                "width":     self._settings.width,
+                "height":    self._settings.height,
+                "gap_px":    self._settings.gap_px,
                 "background": self._settings.background.name(),
             },
             "tree": node_to_dict(self._root),
         }
 
+    @property
+    def current_settings(self):
+        return self._settings
+
     def load_project(self, data: dict) -> None:
         self._push_undo()
         s = data.get("settings", {})
         from PySide6.QtGui import QColor
-        self._settings.width = s.get("width", 1920)
-        self._settings.height = s.get("height", 1080)
+        from math import gcd
+        # Restore aspect ratio — prefer explicit fields, fall back to deriving
+        # from width/height for backward compatibility with old project files.
+        if "aspect_w" in s and "aspect_h" in s:
+            self._settings.set_aspect(s["aspect_w"], s["aspect_h"])
+        else:
+            w = s.get("width", 1920)
+            h = s.get("height", 1080)
+            g = gcd(w, h)
+            self._settings.set_aspect(w // g, h // g)
         self._settings.gap_px = s.get("gap_px", 8)
         self._settings.background = QColor(s.get("background", "#ffffff"))
         self._root = node_from_dict(data["tree"])
@@ -778,15 +792,26 @@ class CollageWorkspace(QWidget):
     # Export
     # ===================================================================
 
-    def export_image(self) -> Optional["PIL.Image.Image"]:  # noqa: F821
-        """Render the collage at full export resolution using Pillow."""
+    def export_image(
+        self,
+        width: int | None = None,
+        height: int | None = None,
+        transparent: bool | None = None,
+    ) -> Optional["PIL.Image.Image"]:  # noqa: F821
+        """Render the collage at full export resolution using Pillow.
+
+        *width* / *height* override the canvas preview resolution when
+        provided (e.g. when exporting at a DPI-scaled resolution).
+        *transparent* overrides the transparent_bg flag in CanvasSettings.
+        """
         from PIL import Image as PILImage, ImageDraw
 
-        W = self._settings.width
-        H = self._settings.height
+        W = width  if width  is not None else self._settings.width
+        H = height if height is not None else self._settings.height
         gap = self._settings.gap_px
         bg = self._settings.background
-        transparent = self._settings.transparent_bg
+        if transparent is None:
+            transparent = self._settings.transparent_bg
 
         if transparent:
             out = PILImage.new("RGBA", (W, H), (0, 0, 0, 0))

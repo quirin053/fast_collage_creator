@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from widgets.collection_panel import CollectionPanel
 from widgets.collage_workspace import CollageWorkspace
+from widgets.export_dialog import ExportDialog
 from widgets.file_explorer_panel import FileExplorerPanel
 from widgets.settings_bar import SettingsBar
 
@@ -113,6 +114,8 @@ class MainWindow(QMainWindow):
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             self._workspace.load_project(data)
+            # Sync settings bar to reflect the loaded aspect ratio / gap / BG
+            self._settings_bar.apply_settings(self._workspace.current_settings)
             # Restore file-explorer base path saved with the project
             basepath = data.get("basepath", "")
             if basepath:
@@ -121,22 +124,35 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Load Failed", str(exc))
 
     def _export(self) -> None:
-        path, selected_filter = QFileDialog.getSaveFileName(
-            self, "Export Collage", str(Path.home() / "collage.jpg"),
-            "JPEG (*.jpg *.jpeg);;PNG (*.png);;WebP (*.webp)"
+        cs = self._settings_bar.settings()
+        default_dir = self._file_explorer.current_path()
+        dlg = ExportDialog(
+            aspect_w=cs.aspect_w,
+            aspect_h=cs.aspect_h,
+            default_dir=default_dir,
+            transparent_bg=cs.transparent_bg,
+            parent=self,
         )
+        if dlg.exec() != ExportDialog.DialogCode.Accepted:
+            return
+
+        p = dlg.get_params()
+        path = p["path"]
         if not path:
             return
 
-        img = self._workspace.export_image()
+        img = self._workspace.export_image(
+            width=p["width"],
+            height=p["height"],
+            transparent=p["transparent"],
+        )
         if img is None:
             QMessageBox.critical(self, "Export Failed", "No image to export.")
             return
 
-        suffix = Path(path).suffix.lower()
+        fmt = p["format"]
         try:
-            if suffix in (".jpg", ".jpeg"):
-                # JPEG can't store transparency — flatten onto BG colour
+            if fmt == "JPEG":
                 if img.mode == "RGBA":
                     from PIL import Image as PILImage
                     bg_c = self._workspace._settings.background
@@ -146,17 +162,40 @@ class MainWindow(QMainWindow):
                     )
                     flat.paste(img, mask=img.split()[3])
                     img = flat
-                img.save(path, "JPEG", quality=95)
-            elif suffix == ".png":
-                img.save(path, "PNG")
-            elif suffix == ".webp":
-                img.save(path, "WEBP", quality=90)
+                else:
+                    img = img.convert("RGB")
+                img.save(path, "JPEG", quality=p["quality"],
+                         dpi=(p["dpi"], p["dpi"]))
+            elif fmt == "PNG":
+                img.save(path, "PNG",
+                         compress_level=p["compress_level"],
+                         dpi=(p["dpi"], p["dpi"]))
+            elif fmt == "WebP":
+                img.save(path, "WEBP",
+                         quality=p["quality"],
+                         lossless=p["lossless"])
+            elif fmt == "TIFF":
+                compression = p["compression"]
+                img.save(path, "TIFF",
+                         compression=None if compression == "none" else compression,
+                         dpi=(p["dpi"], p["dpi"]))
+            elif fmt == "JPEG XL":
+                try:
+                    save_kwargs = {"quality": p["quality"]}
+                    if p["lossless"]:
+                        save_kwargs["lossless"] = True
+                    img.save(path, **save_kwargs)
+                except Exception as exc:
+                    QMessageBox.critical(self, "Export Failed",
+                                         f"JPEG XL export failed:\n{exc}")
+                    return
             else:
                 img.save(path)
+
             QMessageBox.information(
                 self, "Export Complete",
-                f"Collage saved to:\n{path}\n"
-                f"Size: {img.width} × {img.height} px",
+                f"Saved to:\n{path}\n"
+                f"Size: {img.width} × {img.height} px  |  {p['dpi']} DPI",
             )
         except OSError as exc:
             QMessageBox.critical(self, "Export Failed", str(exc))
