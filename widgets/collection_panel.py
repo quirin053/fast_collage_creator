@@ -85,9 +85,9 @@ class _CollectionList(QListWidget):
         self.setResizeMode(QListWidget.ResizeMode.Adjust)
         self.setMovement(QListWidget.Movement.Static)
         self.setDragEnabled(True)
-        # NoDragDrop so Qt's internal model-based drop handling doesn't
-        # interfere; we handle URL drops ourselves via the viewport filter.
-        self.setDragDropMode(QAbstractItemView.DragDropMode.NoDragDrop)
+        # DragOnly lets the list start URL drags outward while the viewport
+        # event filter handles all incoming URL drops independently.
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
         self.setSelectionMode(
             QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setSpacing(4)

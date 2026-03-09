@@ -85,6 +85,8 @@ class FileExplorerPanel(QWidget):
         self._tree.hideColumn(3)
         self._tree.setDragEnabled(True)
         self._tree.setDragDropMode(QTreeView.DragDropMode.DragOnly)
+        self._tree.setSelectionMode(
+            QTreeView.SelectionMode.ExtendedSelection)
 
         # Navigate to Pictures folder initially, fall back to home
         pictures = QStandardPaths.writableLocation(

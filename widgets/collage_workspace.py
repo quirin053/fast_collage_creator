@@ -492,11 +492,15 @@ class CollageWorkspace(QWidget):
 
         self._push_undo()
         if chosen == split_h:
+            old_ids = {ln.id for ln in all_leaves(self._root)}
             self._root = split_leaf(
                 self._root, leaf.id, SplitDirection.HORIZONTAL)
+            self._copy_image_to_new_leaf(old_ids, leaf)
         elif chosen == split_v:
+            old_ids = {ln.id for ln in all_leaves(self._root)}
             self._root = split_leaf(
                 self._root, leaf.id, SplitDirection.VERTICAL)
+            self._copy_image_to_new_leaf(old_ids, leaf)
         elif chosen == remove_act and can_remove:
             new_root = remove_leaf(self._root, leaf.id)
             if new_root is not None:
@@ -551,6 +555,7 @@ class CollageWorkspace(QWidget):
             self.update()
             return
 
+        # When multiple images are dragged onto one cell, use only the first
         path = urls[0].toLocalFile()
         self._push_undo()
         self._root = update_leaf_image(
@@ -743,6 +748,18 @@ class CollageWorkspace(QWidget):
 
     def _set_split_ratio(self, node_id: str, ratio: float) -> None:
         self._root = _set_ratio(self._root, node_id, ratio)
+
+    def _copy_image_to_new_leaf(self, old_ids: set[str],
+                                 source_leaf: LeafNode) -> None:
+        """After a split, find the newly created leaf and give it the same
+        image as *source_leaf* (so both halves show the same picture)."""
+        if source_leaf.image is None:
+            return
+        new_ids = {ln.id for ln in all_leaves(self._root)}
+        fresh = new_ids - old_ids
+        for new_id in fresh:
+            self._root = update_leaf_image(
+                self._root, new_id, copy.deepcopy(source_leaf.image))
 
     # ===================================================================
     # Undo / redo
