@@ -44,11 +44,16 @@ class FileExplorerPanel(QWidget):
         super().__init__(parent)
         self.setMinimumWidth(200)
         self._settings = QSettings("FastCollageCreator", "FileExplorer")
+        self._model_initialized = False
+        self._fs_model: QFileSystemModel | None = None
+        self._proxy: ImageFilterProxy | None = None
+        self._tree: _DraggableTreeView | None = None
         self._build_ui()
 
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
+        """Build static UI shell (header + path bar). Tree is deferred."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 4, 2, 4)
         layout.setSpacing(4)
@@ -73,12 +78,25 @@ class FileExplorerPanel(QWidget):
             lambda: self.navigate_to(self._path_edit.text()))
         layout.addWidget(self._path_edit)
 
-        # -- Tree
+        # Tree placeholder – filled in showEvent
+        self._tree_placeholder_layout = layout
+
+    def _init_model(self) -> None:
+        """Create the filesystem model and tree (called lazily on first show)."""
+        if self._model_initialized:
+            return
+        self._model_initialized = True
+
+        saved = self._settings.value(_SETTINGS_KEY, "") or ""
+        start = self._resolve_start_path(saved)
+
+        # Scope the model to the start directory only — scanning the full
+        # filesystem root is the main cause of startup freezes.
         self._fs_model = QFileSystemModel()
-        self._fs_model.setRootPath(QDir.rootPath())
         self._fs_model.setFilter(
             QDir.Filter.AllDirs | QDir.Filter.Files | QDir.Filter.NoDotAndDotDot
         )
+        self._fs_model.setRootPath(start)
 
         self._proxy = ImageFilterProxy()
         self._proxy.setSourceModel(self._fs_model)
@@ -95,15 +113,15 @@ class FileExplorerPanel(QWidget):
             QTreeView.SelectionMode.ExtendedSelection)
         self._tree.setContextMenuPolicy(
             Qt.ContextMenuPolicy.CustomContextMenu)
-        self._tree.customContextMenuRequested.connect(
-            self._on_context_menu)
-
-        # Navigate to saved / fallback path
-        saved = self._settings.value(_SETTINGS_KEY, "") or ""
-        self.navigate_to(self._resolve_start_path(saved))
-
+        self._tree.customContextMenuRequested.connect(self._on_context_menu)
         self._tree.doubleClicked.connect(self._on_double_click)
-        layout.addWidget(self._tree)
+
+        self._tree_placeholder_layout.addWidget(self._tree)
+        self._apply_root(start)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._init_model()
 
     # ------------------------------------------------------------------
     # Public API
@@ -116,16 +134,22 @@ class FileExplorerPanel(QWidget):
     def navigate_to(self, path: str) -> None:
         """Navigate the tree to *path*, save it to persistent settings."""
         resolved = self._resolve_start_path(path)
-        p = Path(resolved)
-        self._path_edit.setText(str(p))
-        src_idx = self._fs_model.index(str(p))
-        proxy_idx = self._proxy.mapFromSource(src_idx)
-        self._tree.setRootIndex(proxy_idx)
-        self._settings.setValue(_SETTINGS_KEY, str(p))
+        self._path_edit.setText(resolved)
+        self._settings.setValue(_SETTINGS_KEY, resolved)
+        if self._model_initialized:
+            self._apply_root(resolved)
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _apply_root(self, path: str) -> None:
+        """Point the tree at *path*.  Only call after the model is ready."""
+        # Always update the model root so going up past the initial scope works.
+        self._fs_model.setRootPath(path)
+        src_idx = self._fs_model.index(path)
+        proxy_idx = self._proxy.mapFromSource(src_idx)
+        self._tree.setRootIndex(proxy_idx)
 
     def _resolve_start_path(self, preferred: str) -> str:
         """Return the first existing directory in the fallback chain:
@@ -141,18 +165,19 @@ class FileExplorerPanel(QWidget):
 
     def _go_up(self) -> None:
         cur = Path(self._path_edit.text())
-        self.navigate_to(str(cur.parent))
+        parent = cur.parent
+        # Avoid navigating above the filesystem root
+        if parent != cur:
+            self.navigate_to(str(parent))
 
     def _on_double_click(self, proxy_idx: QModelIndex) -> None:
         src_idx = self._proxy.mapToSource(proxy_idx)
         if self._fs_model.isDir(src_idx):
             self.navigate_to(self._fs_model.filePath(src_idx))
         else:
-            # print("Double-clicked file:", self._fs_model.filePath(src_idx))
             path = self._fs_model.filePath(src_idx)
             suffix = Path(path).suffix.lower()
             if suffix in SUPPORTED_EXTENSIONS:
-                # print("Emitting double-clicked image path:", path)
                 self.image_double_clicked.emit(path)
 
     def _on_context_menu(self, pos: QPoint) -> None:
