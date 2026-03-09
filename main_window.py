@@ -77,6 +77,11 @@ class MainWindow(QMainWindow):
         # Apply initial settings
         self._workspace.apply_settings(self._settings_bar.settings())
 
+        # File explorer double-clicked
+        self._file_explorer.image_double_clicked.connect(
+            self._collection.add_image
+        )
+
     # ------------------------------------------------------------------
     # Save / Load / Export
     # ------------------------------------------------------------------
@@ -89,6 +94,8 @@ class MainWindow(QMainWindow):
         if not path:
             return
         data = self._workspace.save_project()
+        # Persist the current file-explorer base path alongside the project
+        data["basepath"] = self._file_explorer.current_path()
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
@@ -106,6 +113,10 @@ class MainWindow(QMainWindow):
             with open(path, encoding="utf-8") as f:
                 data = json.load(f)
             self._workspace.load_project(data)
+            # Restore file-explorer base path saved with the project
+            basepath = data.get("basepath", "")
+            if basepath:
+                self._file_explorer.navigate_to(basepath)
         except (OSError, KeyError, ValueError) as exc:
             QMessageBox.critical(self, "Load Failed", str(exc))
 

@@ -11,8 +11,8 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QSize, Qt, QUrl
 from PySide6.QtGui import QDrag, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QLabel, QListWidget, QListWidgetItem,
-    QSizePolicy, QVBoxLayout, QWidget,
+    QAbstractItemView, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from utils.image_utils import SUPPORTED_EXTENSIONS, thumbnail_cache
@@ -35,7 +35,17 @@ class CollectionPanel(QWidget):
         layout.setContentsMargins(2, 4, 2, 4)
         layout.setSpacing(4)
 
-        header = QLabel("<b>Collection</b>")
+        # -- Header row with Clear button
+        header = QWidget()
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.addWidget(QLabel("<b>Collection</b>"))
+        hl.addStretch()
+        clear_btn = QPushButton("✕ Clear")
+        clear_btn.setFixedWidth(62)
+        clear_btn.setToolTip("Remove all images from the collection")
+        clear_btn.clicked.connect(self._clear)
+        hl.addWidget(clear_btn)
         layout.addWidget(header)
 
         hint = QLabel("Drop images here")
@@ -53,6 +63,10 @@ class CollectionPanel(QWidget):
 
     def _update_hint(self) -> None:
         self._hint.setVisible(self._list.count() == 0)
+
+    def _clear(self) -> None:
+        self._list.clear()
+        self._update_hint()
 
     # ------------------------------------------------------------------
 
