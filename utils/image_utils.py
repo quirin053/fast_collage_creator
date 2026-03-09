@@ -6,6 +6,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
+# Register JPEG XL support via pillow-jxl-plugin (must happen before PIL opens
+# any JXL file).  Fail gracefully if the package is not installed.
+try:
+    import pillow_jxl  # noqa: F401
+except ImportError:
+    pass
+
 from PIL import Image, ImageOps
 from PySide6.QtGui import QImage, QPixmap
 
