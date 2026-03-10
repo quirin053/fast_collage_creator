@@ -3,3 +3,14 @@ __pycache__
 *.pyc
 .vscode
 *.code-workspace
+
+# PyInstaller build output
+dist/
+build/
+*.spec.bak
+
+# Inno Setup output
+installer/Output/
+
+# Virtual environment
+.venv/

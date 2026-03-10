@@ -1,0 +1,142 @@
+﻿name: Build & Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+          - os: macos-latest
+            label: macOS
+          - os: ubuntu-22.04
+            label: Linux
+
+    runs-on: ${{ matrix.os }}
+    name: Build - ${{ matrix.label }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Linux GUI libs
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 \
+            libgl1 libegl1 fuse libfuse2
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build (PyInstaller)
+        run: pyinstaller FastCollageCreator.spec
+
+      # ----------------------------------------------------------------
+      # Windows: Inno Setup installer
+      # ----------------------------------------------------------------
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        run: choco install innosetup --no-progress -y
+
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" `
+            /DAppVersion="$version" `
+            installer\setup.iss
+
+      - name: Upload Windows installer
+        if: runner.os == 'Windows'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer\Output\FastCollageCreator_Setup.exe
+
+      # ----------------------------------------------------------------
+      # macOS: .dmg
+      # ----------------------------------------------------------------
+      - name: Build macOS .dmg
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p dmg_stage
+          cp -R dist/FastCollageCreator.app dmg_stage/
+          ln -s /Applications dmg_stage/Applications
+          hdiutil create \
+            -volname "Fast Collage Creator" \
+            -srcfolder dmg_stage \
+            -ov -format UDZO \
+            FastCollageCreator_macOS.dmg
+
+      - name: Upload macOS .dmg
+        if: runner.os == 'macOS'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: FastCollageCreator_macOS.dmg
+
+      # ----------------------------------------------------------------
+      # Linux: AppImage
+      # ----------------------------------------------------------------
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        run: |
+          wget -q \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+            -O appimagetool
+          chmod +x appimagetool
+
+          mkdir -p AppDir/usr/bin
+
+          cp -r dist/FastCollageCreator/* AppDir/usr/bin/
+
+          cat > AppDir/FastCollageCreator.desktop << 'EOF'
+          [Desktop Entry]
+          Name=Fast Collage Creator
+          Exec=FastCollageCreator
+          Icon=FastCollageCreator
+          Type=Application
+          Categories=Graphics;
+          EOF
+
+          if [ -f icon.png ]; then
+            cp icon.png AppDir/FastCollageCreator.png
+          else
+            python3 -c "from PIL import Image; Image.new('RGBA',(256,256),(40,40,40,255)).save('AppDir/FastCollageCreator.png')"
+          fi
+
+          cat > AppDir/AppRun << 'APPRUN'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export LD_LIBRARY_PATH="$HERE/usr/bin:$LD_LIBRARY_PATH"
+          exec "$HERE/usr/bin/FastCollageCreator" "$@"
+          APPRUN
+          chmod +x AppDir/AppRun
+
+          ARCH=x86_64 ./appimagetool AppDir FastCollageCreator_Linux.AppImage
+
+      - name: Upload Linux AppImage
+        if: runner.os == 'Linux'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: FastCollageCreator_Linux.AppImage
