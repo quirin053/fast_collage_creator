@@ -52,7 +52,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="FastCollageCreator.app",
-        icon="icon.icns",
+        icon="icons/icon_01.icns",
         bundle_identifier="com.quirin053.fastcollagecreator",
         info_plist={
             "NSHighResolutionCapable": True,
