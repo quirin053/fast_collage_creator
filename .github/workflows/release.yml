@@ -72,7 +72,9 @@ jobs:
         if: runner.os == 'Windows'
         uses: softprops/action-gh-release@v2
         with:
-          files: installer\Output\FastCollageCreator_Setup.exe
+          files: |
+            installer/Output/FastCollageCreator_Setup.exe
+            D:\a\fast_collage_creator\fast_collage_creator\installer\Output\FastCollageCreator_Setup.exe
 
       # ----------------------------------------------------------------
       # macOS: .dmg
