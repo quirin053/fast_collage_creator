@@ -10,7 +10,7 @@
 #define AppURL "https://github.com/quirin053/fast_collage_creator"
 
 [Setup]
-AppId={728728fc-e63f-4603-802b-563bf3b4c31f}
+AppId={{728728fc-e63f-4603-802b-563bf3b4c31f}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher={#AppPublisher}
