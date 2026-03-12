@@ -82,6 +82,10 @@ class MainWindow(QMainWindow):
         self._file_explorer.image_double_clicked.connect(
             self._collection.add_image
         )
+        # File explorer "Add Images" picker
+        self._file_explorer.images_selected.connect(
+            lambda paths: [self._collection.add_image(p) for p in paths]
+        )
 
     # ------------------------------------------------------------------
     # Save / Load / Export

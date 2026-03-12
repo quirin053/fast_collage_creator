@@ -8,6 +8,7 @@ Fast Collage Creator is a Python application for quickly generating image collag
 ## Features
 - Customizable collage layouts
 - Easy-to-use graphical interface
+- to split a border hold shift while dragging
 
 ## Running Instructions
 

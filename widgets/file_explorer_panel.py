@@ -9,12 +9,12 @@ from pathlib import Path
 from PySide6.QtCore import (
     QDir, QMimeData, QModelIndex, QPoint, QSettings,
     QSortFilterProxyModel, QStandardPaths, Qt, QUrl,
-    Signal,
+    Signal, Slot,
 )
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
-    QFileSystemModel, QHBoxLayout, QLabel, QLineEdit,
-    QMenu, QPushButton, QTreeView, QVBoxLayout, QWidget,
+    QFileDialog, QFileSystemModel, QHBoxLayout, QLabel, QLineEdit,
+    QMenu, QPushButton, QStyle, QTreeView, QVBoxLayout, QWidget,
 )
 
 from utils.image_utils import SUPPORTED_EXTENSIONS
@@ -39,6 +39,7 @@ class FileExplorerPanel(QWidget):
     """File-system tree panel with drag support."""
 
     image_double_clicked = Signal(str)
+    images_selected = Signal(list)  # list[str] – paths picked via file dialog
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -65,6 +66,14 @@ class FileExplorerPanel(QWidget):
         lbl = QLabel("<b>Files</b>")
         hl.addWidget(lbl)
         hl.addStretch()
+        browse_btn = QPushButton("📂 Browse")
+        browse_btn.setToolTip("Choose root folder")
+        browse_btn.clicked.connect(self._browse_folder)
+        hl.addWidget(browse_btn)
+        add_btn = QPushButton("＋ Add Images")
+        add_btn.setToolTip("Pick image files and add them to the collection")
+        add_btn.clicked.connect(self._add_images_via_picker)
+        hl.addWidget(add_btn)
         up_btn = QPushButton("↑ Up")
         up_btn.setFixedWidth(55)
         up_btn.clicked.connect(self._go_up)
@@ -72,11 +81,24 @@ class FileExplorerPanel(QWidget):
         layout.addWidget(header)
 
         # -- Path bar
+        path_row = QWidget()
+        pl = QHBoxLayout(path_row)
+        pl.setContentsMargins(0, 0, 0, 0)
+        pl.setSpacing(2)
         self._path_edit = QLineEdit()
         self._path_edit.setPlaceholderText("Directory path…")
         self._path_edit.returnPressed.connect(
             lambda: self.navigate_to(self._path_edit.text()))
-        layout.addWidget(self._path_edit)
+        pl.addWidget(self._path_edit)
+        go_btn = QPushButton()
+        go_btn.setToolTip("Navigate to path")
+        go_btn.setFixedWidth(26)
+        go_btn.setIcon(
+            self.style().standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)
+        )
+        go_btn.clicked.connect(lambda: self.navigate_to(self._path_edit.text()))
+        pl.addWidget(go_btn)
+        layout.addWidget(path_row)
 
         # Tree placeholder – filled in showEvent
         self._tree_placeholder_layout = layout
@@ -88,15 +110,20 @@ class FileExplorerPanel(QWidget):
         self._model_initialized = True
 
         saved = self._settings.value(_SETTINGS_KEY, "") or ""
-        start = self._resolve_start_path(saved)
+        has_saved = bool(saved and Path(saved).is_dir())
+        start = saved if has_saved else ""
 
-        # Scope the model to the start directory only — scanning the full
-        # filesystem root is the main cause of startup freezes.
+        if has_saved:
+            self._path_edit.setText(start)
+
+        # Use a concrete root for the model to avoid scanning the entire FS.
+        # Falls back to home only as an internal model anchor (not shown).
+        model_root = start if has_saved else QDir.homePath()
         self._fs_model = QFileSystemModel()
         self._fs_model.setFilter(
             QDir.Filter.AllDirs | QDir.Filter.Files | QDir.Filter.NoDotAndDotDot
         )
-        self._fs_model.setRootPath(start)
+        self._fs_model.setRootPath(model_root)
 
         self._proxy = ImageFilterProxy()
         self._proxy.setSourceModel(self._fs_model)
@@ -117,7 +144,11 @@ class FileExplorerPanel(QWidget):
         self._tree.doubleClicked.connect(self._on_double_click)
 
         self._tree_placeholder_layout.addWidget(self._tree)
-        self._apply_root(start)
+        # Re-apply the root index once the model finishes loading a directory
+        # so folder icons are shown correctly (e.g. after pressing "Up").
+        self._fs_model.directoryLoaded.connect(self._on_directory_loaded)
+        if has_saved:
+            self._apply_root(start)
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
@@ -147,9 +178,20 @@ class FileExplorerPanel(QWidget):
         """Point the tree at *path*.  Only call after the model is ready."""
         # Always update the model root so going up past the initial scope works.
         self._fs_model.setRootPath(path)
+        self._pending_root = path
         src_idx = self._fs_model.index(path)
         proxy_idx = self._proxy.mapFromSource(src_idx)
         self._tree.setRootIndex(proxy_idx)
+
+    @Slot(str)
+    def _on_directory_loaded(self, loaded_path: str) -> None:
+        """Re-set tree root index after the model loads a directory.
+        This ensures folder icons appear even for newly scoped directories."""
+        pending = getattr(self, "_pending_root", None)
+        if pending and Path(loaded_path) == Path(pending):
+            src_idx = self._fs_model.index(pending)
+            proxy_idx = self._proxy.mapFromSource(src_idx)
+            self._tree.setRootIndex(proxy_idx)
 
     def _resolve_start_path(self, preferred: str) -> str:
         """Return the first existing directory in the fallback chain:
@@ -162,6 +204,31 @@ class FileExplorerPanel(QWidget):
         if pictures and Path(pictures).is_dir():
             return pictures
         return QDir.homePath()
+
+    def _browse_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Choose Root Folder",
+            self._path_edit.text() or QDir.homePath(),
+            QFileDialog.Option.ShowDirsOnly
+        )
+        if folder:
+            self.navigate_to(folder)
+
+    def _add_images_via_picker(self) -> None:
+        """Open a file picker for images and emit them to the collection."""
+        ext_list = " ".join(f"*{e}" for e in sorted(SUPPORTED_EXTENSIONS))
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Images",
+            self._path_edit.text() or QDir.homePath(),
+            f"Images ({ext_list});;All Files (*)",
+        )
+        if files:
+            # Navigate the tree to the folder of the first picked file
+            first_dir = str(Path(files[0]).parent)
+            self.navigate_to(first_dir)
+            self.images_selected.emit(files)
 
     def _go_up(self) -> None:
         cur = Path(self._path_edit.text())
