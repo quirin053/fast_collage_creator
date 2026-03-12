@@ -25,13 +25,15 @@ from PySide6.QtGui import (
     QDragMoveEvent, QDropEvent, QKeyEvent, QMouseEvent, QPainter,
     QPen, QPixmap, QWheelEvent,
 )
-from PySide6.QtWidgets import QMenu, QWidget
+from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
 from models.bsp_tree import (
     ImageState, LeafNode, Node, SplitDirection, SplitNode,
-    all_leaves, all_splits, make_default_tree,
+    all_leaves, all_splits, find_valid_crossing, find_node,
+    find_parent, make_default_tree,
     node_from_dict, node_to_dict,
-    remove_leaf, split_leaf, update_leaf_image,
+    remove_leaf, rotate_split, split_leaf, try_merge_borders,
+    update_leaf_image,
 )
 from utils.image_utils import thumbnail_cache
 from widgets.settings_bar import CanvasSettings
@@ -41,6 +43,7 @@ from widgets.settings_bar import CanvasSettings
 # -----------------------------------------------------------------------
 HIT_RADIUS = 6        # pixels – how close to a border the cursor must be
 ALIGN_TOL = 2         # pixels – tolerance for grouping co-linear borders
+SNAP_TOL = 6          # pixels – tolerance for snap/unify preview during drag
 MAX_UNDO = 50         # maximum undo steps
 THUMB_MAX = 1024      # max dimension for in-canvas preview thumbnails
 
@@ -93,6 +96,9 @@ class CollageWorkspace(QWidget):
         self._dragging_borders: list[BorderInfo] = []
         self._drag_start_pos: float = 0.0         # absolute pixel at drag start
         self._drag_start_ratios: dict[str, float] = {}  # node_id → original ratio
+        self._shift_drag: bool = False             # Shift was held at drag start
+        self._snap_candidates: list[BorderInfo] = []  # borders that would merge
+        self._snap_target_ids: set[str] = set()    # node_ids of snap candidates
 
         # Drag state for image pan
         self._panning_cell: Optional[str] = None  # leaf node_id
@@ -302,16 +308,28 @@ class CollageWorkspace(QWidget):
                 painter.drawRect(cell_rect)
 
         # -- Draw borders
+        snap_ids = self._snap_target_ids
+        dragging_ids = {b.node_id for b in self._dragging_borders}
+        snap_colour = QColor("#44cc88")  # green/cyan for snap preview
+
         for border in self._borders:
             is_hovered = (
                 self._hovered_border is not None
                 and self._hovered_border.node_id == border.node_id
             )
-            is_dragging = any(
-                b.node_id == border.node_id for b in self._dragging_borders
-            )
-            if is_dragging:
-                colour = QColor("#ffcc00")
+            is_dragging = border.node_id in dragging_ids
+            is_snap = border.node_id in snap_ids
+
+            if is_snap:
+                # Snap candidate: highlight in green
+                colour = snap_colour
+                width = 3
+            elif is_dragging:
+                if snap_ids:
+                    # Dragged border when snap is active: also green
+                    colour = snap_colour
+                else:
+                    colour = QColor("#ffcc00")
                 width = 3
             elif is_hovered:
                 colour = QColor("#aaddff")
@@ -421,9 +439,21 @@ class CollageWorkspace(QWidget):
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
             if self._dragging_borders:
+                # Attempt merge if snap candidates exist
+                if self._snap_candidates and self._dragging_borders:
+                    dragged = self._dragging_borders[0]
+                    candidate = self._snap_candidates[0]
+                    merged = try_merge_borders(
+                        self._root, dragged.node_id, candidate.node_id)
+                    if merged is not None:
+                        self._root = merged
+
                 self._push_undo()
                 self._dragging_borders = []
                 self._drag_start_ratios = {}
+                self._shift_drag = False
+                self._snap_candidates = []
+                self._snap_target_ids = set()
                 self.tree_changed.emit()
             if self._panning_cell is not None:
                 self._push_undo()
@@ -589,9 +619,34 @@ class CollageWorkspace(QWidget):
         else:
             self._drag_start_pos = float(pos.y())
 
-        if modifiers & Qt.KeyboardModifier.ShiftModifier:
+        self._snap_candidates = []
+        self._snap_target_ids = set()
+        self._shift_drag = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+
+        if self._shift_drag:
+            # --- Shift+drag: rotate the split so its border segments
+            # become independently movable (only when both children are
+            # perpendicular splits at matching ratios). ---
+            rect_t = (float(border.rect.left()), float(border.rect.top()),
+                      float(border.rect.width()), float(border.rect.height()))
+            crossing = find_valid_crossing(
+                self._root, border.node_id, rect_t)
+
+            if crossing is not None:
+                self._push_undo()
+                rotated = rotate_split(self._root, border.node_id)
+                if rotated is not None:
+                    self._root = rotated
+                    # Re-compute layout and grab the segment under cursor.
+                    self._compute_layout()
+                    border = self._border_at(pos)
+                    if border is None:
+                        self._dragging_borders = []
+                        return
+
             grouped = [border]
         else:
+            # --- Normal drag: move all co-linear borders together ---
             grouped = self._find_aligned_borders(border)
 
         self._dragging_borders = grouped
@@ -633,7 +688,44 @@ class CollageWorkspace(QWidget):
             new_ratio = max(0.05, min(0.95, new_ratio))
             self._set_split_ratio(b.node_id, new_ratio)
 
+        # --- Snap / unify detection ---
+        self._snap_candidates = []
+        self._snap_target_ids = set()
+        shift_held = bool(
+            QApplication.keyboardModifiers() & Qt.KeyboardModifier.ShiftModifier
+        )
+        if self._shift_drag and not shift_held:
+            # Shift was held at start (split mode) but released now — enable snap.
+            self._detect_snap_candidates()
+        elif not self._shift_drag:
+            # Normal drag — no snap needed (borders already move together).
+            pass
+
         self._invalidate_layout()
+
+    def _detect_snap_candidates(self) -> None:
+        """Find co-linear borders near the currently dragged border(s)."""
+        if not self._dragging_borders:
+            return
+
+        # Temporarily compute layout to get current positions.
+        self._compute_layout()
+
+        dragged_ids = {b.node_id for b in self._dragging_borders}
+        for dragged_b in self._dragging_borders:
+            # Find the updated border info from the freshly computed layout.
+            updated = next((b for b in self._borders
+                            if b.node_id == dragged_b.node_id), None)
+            if updated is None:
+                continue
+            for candidate in self._borders:
+                if candidate.node_id in dragged_ids:
+                    continue
+                if candidate.direction != updated.direction:
+                    continue
+                if abs(candidate.position - updated.position) <= SNAP_TOL:
+                    self._snap_candidates.append(candidate)
+                    self._snap_target_ids.add(candidate.node_id)
 
     def _find_aligned_borders(self, target: BorderInfo) -> list[BorderInfo]:
         """Return all borders of the same orientation at the same pixel position."""
@@ -751,17 +843,25 @@ class CollageWorkspace(QWidget):
     # ===================================================================
 
     def _get_leaf(self, node_id: str) -> Optional[LeafNode]:
-        from models.bsp_tree import find_node
         node = find_node(self._root, node_id)
         return node if isinstance(node, LeafNode) else None
 
     def _get_split(self, node_id: str) -> Optional[SplitNode]:
-        from models.bsp_tree import find_node
         node = find_node(self._root, node_id)
         return node if isinstance(node, SplitNode) else None
 
     def _set_split_ratio(self, node_id: str, ratio: float) -> None:
         self._root = _set_ratio(self._root, node_id, ratio)
+
+    def _rect_for_split(self, split_id: str) -> Optional[tuple[float, float, float, float]]:
+        """Walk the tree to compute the pixel rect allocated to *split_id*.
+        Returns (left, top, width, height) or None if not found."""
+        canvas = self._canvas_rect()
+        return _find_node_rect(
+            self._root, split_id,
+            (float(canvas.left()), float(canvas.top()),
+             float(canvas.width()), float(canvas.height()))
+        )
 
     def _copy_image_to_new_leaf(self, old_ids: set[str],
                                  source_leaf: LeafNode) -> None:
@@ -969,3 +1069,26 @@ def _traverse_export(node: Node, rect: QRect,
                             rect.width(), rect.bottom() - int(split_y) + 1)
         _traverse_export(node.first, top_rect, cells, borders)
         _traverse_export(node.second, bottom_rect, cells, borders)
+
+
+def _find_node_rect(node: Node, target_id: str,
+                    rect: tuple[float, float, float, float]
+                    ) -> Optional[tuple[float, float, float, float]]:
+    """Recursively find the pixel rect allocated to the node with *target_id*."""
+    if node.id == target_id:
+        return rect
+    if isinstance(node, LeafNode):
+        return None
+    left, top, w, h = rect
+    if node.direction == SplitDirection.HORIZONTAL:
+        w1 = w * node.ratio
+        r1 = (left, top, w1, h)
+        r2 = (left + w1, top, w - w1, h)
+    else:
+        h1 = h * node.ratio
+        r1 = (left, top, w, h1)
+        r2 = (left, top + h1, w, h - h1)
+    result = _find_node_rect(node.first, target_id, r1)
+    if result is not None:
+        return result
+    return _find_node_rect(node.second, target_id, r2)
