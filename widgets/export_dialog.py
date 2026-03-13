@@ -165,8 +165,8 @@ class ExportDialog(QDialog):
         root.addWidget(res_group)
 
         # Set default pixel values (Full HD equivalent kept to aspect)
-        self._set_width_px(1920 if self._aspect_w >= self._aspect_h
-                          else round(1920 * self._aspect_w / self._aspect_h))
+        self._set_width_px(6000 if self._aspect_w >= self._aspect_h
+                          else round(6000 * self._aspect_w / self._aspect_h))
 
         # ---- Format-specific params --------------------------------
         params_group = QGroupBox("Format options")

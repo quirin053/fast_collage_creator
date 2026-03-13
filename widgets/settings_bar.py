@@ -51,19 +51,19 @@ _ASPECT_PRESETS: dict[str, tuple[int, int]] = {
     "A4  Landscape":    (297, 210),
     "Custom":           (0, 0),
 }
-_DEFAULT_PRESET = "16 : 9"
+_DEFAULT_PRESET = "3 : 2"
 
 
 @dataclass
 class CanvasSettings:
     # Aspect ratio (used by export dialog and workspace layout)
-    aspect_w: int = 16
-    aspect_h: int = 9
+    aspect_w: int = 3
+    aspect_h: int = 2
     # Preview dimensions (auto-derived; workspace uses these for rendering)
     width: int = field(init=False)
     height: int = field(init=False)
     # Gap between cells in the exported image (px)
-    gap_px: int = 8
+    gap_px: int = 0
     # Background colour and hit-width of draggable borders
     background: QColor = None
     border_width_ui: int = 4

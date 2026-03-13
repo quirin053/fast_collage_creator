@@ -180,7 +180,7 @@ class CollageWorkspace(QWidget):
             h = s.get("height", 1080)
             g = gcd(w, h)
             self._settings.set_aspect(w // g, h // g)
-        self._settings.gap_px = s.get("gap_px", 8)
+        self._settings.gap_px = s.get("gap_px", 0)
         self._settings.background = QColor(s.get("background", "#ffffff"))
         self._root = node_from_dict(data["tree"])
         self._invalidate_layout()
@@ -897,7 +897,7 @@ class CollageWorkspace(QWidget):
         width: int | None = None,
         height: int | None = None,
         transparent: bool | None = None,
-    ) -> Optional["PIL.Image.Image"]:  # noqa: F821
+    ) -> Optional[object]:  # Return type is Pillow Image
         """Render the collage at full export resolution using Pillow.
 
         *width* / *height* override the canvas preview resolution when
