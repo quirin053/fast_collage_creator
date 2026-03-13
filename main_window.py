@@ -2,12 +2,12 @@
 Main application window.
 
 Layout:
-  ┌─────────────────────────────────────────────────────┐
-  │  Settings bar (top)                                  │
-  ├──────────────┬──────────────┬───────────────────────┤
-  │ File Explorer│  Collection  │  Collage Workspace     │
-  │   (left)     │   (centre)   │   (right)              │
-  └──────────────┴──────────────┴───────────────────────┘
+    ┌───────────────────────────────────────────────────┐
+    │  Settings bar (top)                               │
+    ├──────────────┬────────────────────────────────────┤
+    │  Collection  │  Collage Workspace                 │
+    │   (left)     │   (right)                          │
+    └──────────────┴────────────────────────────────────┘
 """
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
 from widgets.collection_panel import CollectionPanel
 from widgets.collage_workspace import CollageWorkspace
 from widgets.export_dialog import ExportDialog
-from widgets.file_explorer_panel import FileExplorerPanel
 from widgets.settings_bar import SettingsBar
 
 
@@ -50,20 +49,18 @@ class MainWindow(QMainWindow):
         self._settings_bar.setFixedHeight(48)
         vbox.addWidget(self._settings_bar)
 
-        # -- Horizontal splitter for the three panels --
+        # -- Horizontal splitter for collection + workspace --
         self._splitter = QSplitter(Qt.Orientation.Horizontal)
         vbox.addWidget(self._splitter, stretch=1)
 
-        self._file_explorer = FileExplorerPanel()
         self._collection = CollectionPanel()
         self._workspace = CollageWorkspace()
 
-        self._splitter.addWidget(self._file_explorer)
         self._splitter.addWidget(self._collection)
         self._splitter.addWidget(self._workspace)
 
         # Give the workspace most of the space
-        self._splitter.setSizes([220, 200, 900])
+        self._splitter.setSizes([260, 1140])
         self._splitter.setChildrenCollapsible(False)
 
     def _connect_signals(self) -> None:
@@ -78,15 +75,6 @@ class MainWindow(QMainWindow):
         # Apply initial settings
         self._workspace.apply_settings(self._settings_bar.settings())
 
-        # File explorer double-clicked
-        self._file_explorer.image_double_clicked.connect(
-            self._collection.add_image
-        )
-        # File explorer "Add Images" picker
-        self._file_explorer.images_selected.connect(
-            lambda paths: [self._collection.add_image(p) for p in paths]
-        )
-
     # ------------------------------------------------------------------
     # Save / Load / Export
     # ------------------------------------------------------------------
@@ -99,8 +87,8 @@ class MainWindow(QMainWindow):
         if not path:
             return
         data = self._workspace.save_project()
-        # Persist the current file-explorer base path alongside the project
-        data["basepath"] = self._file_explorer.current_path()
+        # Persist the last used picker path alongside the project
+        data["basepath"] = self._collection.last_path()
         try:
             with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2)
@@ -120,16 +108,16 @@ class MainWindow(QMainWindow):
             self._workspace.load_project(data)
             # Sync settings bar to reflect the loaded aspect ratio / gap / BG
             self._settings_bar.apply_settings(self._workspace.current_settings)
-            # Restore file-explorer base path saved with the project
+            # Restore picker base path saved with the project
             basepath = data.get("basepath", "")
             if basepath:
-                self._file_explorer.navigate_to(basepath)
+                self._collection.set_last_path(basepath)
         except (OSError, KeyError, ValueError) as exc:
             QMessageBox.critical(self, "Load Failed", str(exc))
 
     def _export(self) -> None:
         cs = self._settings_bar.settings()
-        default_dir = self._file_explorer.current_path()
+        default_dir = self._collection.last_path() or str(Path.home())
         dlg = ExportDialog(
             aspect_w=cs.aspect_w,
             aspect_h=cs.aspect_h,

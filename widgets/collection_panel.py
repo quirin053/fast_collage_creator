@@ -1,23 +1,26 @@
 """
 Collection panel: a staging area where the user gathers images
 before placing them into the collage.
-Accepts drops from the file explorer and from the OS.
+Accepts drops from the OS.
 Images can be dragged *out* from here into collage cells.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QMimeData, QPoint, QSize, Qt, QUrl
+from PySide6.QtCore import (
+    QEvent, QMimeData, QPoint, QSize, Qt, QUrl, QSettings, QStandardPaths,
+)
 from PySide6.QtGui import QDrag, QPainter, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
-    QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QAbstractItemView, QFileDialog, QHBoxLayout, QLabel, QListWidget,
+    QListWidgetItem, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from utils.image_utils import SUPPORTED_EXTENSIONS, thumbnail_cache
 
 THUMB = 96  # pixel size for collection thumbnails
+_SETTINGS_KEY = "file_explorer/last_path"  # keep existing key for continuity
 
 
 class CollectionPanel(QWidget):
@@ -26,6 +29,8 @@ class CollectionPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMinimumWidth(160)
+        self._settings = QSettings("FastCollageCreator", "FileExplorer")
+        self._last_path = self._load_last_path()
         self._build_ui()
 
     # ------------------------------------------------------------------
@@ -41,6 +46,10 @@ class CollectionPanel(QWidget):
         hl.setContentsMargins(0, 0, 0, 0)
         hl.addWidget(QLabel("<b>Collection</b>"))
         hl.addStretch()
+        add_btn = QPushButton("＋ Add Images")
+        add_btn.setToolTip("Pick image files and add them to the collection")
+        add_btn.clicked.connect(self._add_images_via_picker)
+        hl.addWidget(add_btn)
         clear_btn = QPushButton("✕ Clear")
         clear_btn.setFixedWidth(62)
         clear_btn.setToolTip("Remove all images from the collection")
@@ -70,6 +79,16 @@ class CollectionPanel(QWidget):
 
     # ------------------------------------------------------------------
 
+    def last_path(self) -> str:
+        return self._last_path
+
+    def set_last_path(self, path: str) -> None:
+        if path:
+            self._last_path = path
+            self._settings.setValue(_SETTINGS_KEY, path)
+
+    # ------------------------------------------------------------------
+
     def add_image(self, path: str) -> None:
         """Add an image path to the collection if not already present."""
         p = Path(path)
@@ -86,6 +105,38 @@ class CollectionPanel(QWidget):
             item.setIcon(pixmap)           # QPixmap is accepted as QIcon
         item.setToolTip(str(p))
         self._list.addItem(item)
+
+    def _add_images_via_picker(self) -> None:
+        ext_list = " ".join(f"*{e}" for e in sorted(SUPPORTED_EXTENSIONS))
+        start_dir = self._starting_dir()
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Images",
+            start_dir,
+            f"Images ({ext_list});;All Files (*)",
+        )
+        if not files:
+            return
+        first_dir = str(Path(files[0]).parent)
+        self.set_last_path(first_dir)
+        for f in files:
+            self.add_image(f)
+
+    def _starting_dir(self) -> str:
+        if self._last_path and Path(self._last_path).is_dir():
+            return self._last_path
+        pictures = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.PicturesLocation
+        )
+        if pictures and Path(pictures).is_dir():
+            return pictures
+        return str(Path.home())
+
+    def _load_last_path(self) -> str:
+        saved = self._settings.value(_SETTINGS_KEY, "") or ""
+        if saved and Path(saved).is_dir():
+            return str(saved)
+        return ""
 
 
 class _CollectionList(QListWidget):
