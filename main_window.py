@@ -157,11 +157,11 @@ class MainWindow(QMainWindow):
                 else:
                     img = img.convert("RGB")
                 img.save(path, "JPEG", quality=p["quality"],
-                         dpi=(p["dpi"], p["dpi"]))
+                         )
             elif fmt == "PNG":
                 img.save(path, "PNG",
                          compress_level=p["compress_level"],
-                         dpi=(p["dpi"], p["dpi"]))
+                         )
             elif fmt == "WebP":
                 img.save(path, "WEBP",
                          quality=p["quality"],
@@ -170,7 +170,7 @@ class MainWindow(QMainWindow):
                 compression = p["compression"]
                 img.save(path, "TIFF",
                          compression=None if compression == "none" else compression,
-                         dpi=(p["dpi"], p["dpi"]))
+                         )
             elif fmt == "JPEG XL":
                 try:
                     save_kwargs = {"quality": p["quality"]}
@@ -187,7 +187,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self, "Export Complete",
                 f"Saved to:\n{path}\n"
-                f"Size: {img.width} × {img.height} px  |  {p['dpi']} DPI",
+                f"Size: {img.width} × {img.height} px",
             )
         except OSError as exc:
             QMessageBox.critical(self, "Export Failed", str(exc))

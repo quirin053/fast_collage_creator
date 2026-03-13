@@ -1,17 +1,7 @@
 """
-Export dialog: lets the user configure output path, resolution, format and
-format-specific parameters before exporting.
-
-Resolution model
-----------------
-  width_px  and  height_px  are the primary pixel values (locked to the
-  canvas aspect ratio).  DPI is an independent value that controls the
-  physical print size shown as a read-only label.
-
-  Changing width_px  → height_px updates  (aspect locked)
-  Changing height_px → width_px  updates  (aspect locked)
-  Changing DPI       → pixel values scale proportionally
-                       (same physical size, different resolution)
+Export dialog: lets the user configure output path, resolution (px) and
+format-specific parameters before exporting. Resolution is locked to the
+canvas aspect ratio.
 """
 from __future__ import annotations
 
@@ -20,7 +10,7 @@ from pathlib import Path
 from PySide6.QtCore import QSettings, Qt
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout,
+    QFormLayout, QGroupBox, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QSlider, QSpinBox,
     QStackedWidget, QVBoxLayout, QWidget, QFileDialog,
 )
@@ -131,14 +121,6 @@ class ExportDialog(QDialog):
         rfl = QFormLayout(res_group)
         rfl.setContentsMargins(8, 8, 8, 8)
 
-        # DPI
-        self._dpi_spin = QSpinBox()
-        self._dpi_spin.setRange(1, 9600)
-        self._dpi_spin.setValue(300)
-        self._dpi_spin.setSuffix(" DPI")
-        self._dpi_spin.valueChanged.connect(self._on_dpi_changed)
-        rfl.addRow("DPI:", self._dpi_spin)
-
         # Width px
         self._w_spin = QSpinBox()
         self._w_spin.setRange(1, 99999)
@@ -152,10 +134,6 @@ class ExportDialog(QDialog):
         self._h_spin.setSuffix(" px")
         self._h_spin.valueChanged.connect(self._on_h_changed)
         rfl.addRow("Height:", self._h_spin)
-
-        # Physical size
-        self._phys_label = QLabel()
-        rfl.addRow("Print size:", self._phys_label)
 
         # aspect ratio label
         g = _gcd(self._aspect_w, self._aspect_h)
@@ -287,7 +265,6 @@ class ExportDialog(QDialog):
         self._w_spin.setValue(w)
         self._h_spin.setValue(h)
         self._updating = False
-        self._update_phys_label()
 
     def _set_height_px(self, h: int) -> None:
         """Set height and derive width from aspect ratio."""
@@ -297,7 +274,6 @@ class ExportDialog(QDialog):
         self._w_spin.setValue(w)
         self._h_spin.setValue(h)
         self._updating = False
-        self._update_phys_label()
 
     def _on_w_changed(self, w: int) -> None:
         if self._updating:
@@ -308,24 +284,6 @@ class ExportDialog(QDialog):
         if self._updating:
             return
         self._set_height_px(h)
-
-    def _on_dpi_changed(self, dpi: int) -> None:
-        if self._updating or dpi < 1:
-            return
-        self._update_phys_label()
-
-    def _update_phys_label(self) -> None:
-        dpi = max(1, self._dpi_spin.value())
-        w   = self._w_spin.value()
-        h   = self._h_spin.value()
-        wi  = w / dpi
-        hi  = h / dpi
-        wc  = wi * 2.54
-        hc  = hi * 2.54
-        self._phys_label.setText(
-            f"{wc:.1f} × {hc:.1f} cm  "
-            f"({wi:.2f} × {hi:.2f} in)"
-        )
 
     # ===================================================================
     # Accept
@@ -352,7 +310,6 @@ class ExportDialog(QDialog):
             "format":       fmt,
             "width":        self._w_spin.value(),
             "height":       self._h_spin.value(),
-            "dpi":          self._dpi_spin.value(),
             "transparent":  self._transp_cb.isChecked(),
         }
         if fmt == "JPEG":
