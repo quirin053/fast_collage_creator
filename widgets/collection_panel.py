@@ -78,6 +78,18 @@ class CollectionPanel(QWidget):
         self._update_hint()
 
     # ------------------------------------------------------------------
+    def paths(self) -> list[str]:
+        return [
+            self._list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self._list.count())
+        ]
+
+    def set_paths(self, paths: list[str]) -> None:
+        self._clear()
+        for p in paths:
+            self.add_image(p)
+
+    # ------------------------------------------------------------------
 
     def last_path(self) -> str:
         return self._last_path

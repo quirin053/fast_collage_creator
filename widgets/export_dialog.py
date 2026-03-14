@@ -36,6 +36,10 @@ class ExportDialog(QDialog):
     Returns export parameters via :meth:`get_params` after exec_().
     """
 
+    # Keep overwrite preference for the lifetime of the app session
+    _overwrite_default: bool = False
+    _session_params: dict | None = None
+
     FORMATS = ["JPEG", "PNG", "WebP", "TIFF", "JPEG XL"]
     EXTS    = {
         "JPEG":     ".jpg",
@@ -50,6 +54,8 @@ class ExportDialog(QDialog):
         aspect_w: int,
         aspect_h: int,
         default_dir: str = "",
+        default_basename: str = "collage",
+        preset_params: dict | None = None,
         transparent_bg: bool = False,
         parent: QWidget | None = None,
     ) -> None:
@@ -60,7 +66,6 @@ class ExportDialog(QDialog):
         self._aspect_w = max(aspect_w, 1)
         self._aspect_h = max(aspect_h, 1)
         self._updating = False          # re-entrancy guard
-
         self._qs = QSettings(_SETTINGS_ORG, _SETTINGS_APP)
 
         # Determine starting directory
@@ -73,10 +78,15 @@ class ExportDialog(QDialog):
         last_fmt  = self._qs.value(_KEY_FORMAT, "JPEG") or "JPEG"
         if last_fmt not in self.FORMATS:
             last_fmt = "JPEG"
-        default_name = "collage" + self.EXTS.get(last_fmt, ".jpg")
+        base = default_basename or "collage"
+        default_name = base + self.EXTS.get(last_fmt, ".jpg")
         self._default_path = str(Path(saved_dir) / default_name)
 
         self._transparent_bg = transparent_bg
+        self._overwrite = ExportDialog._overwrite_default
+        self._final_path = self._default_path
+        self._requested_path: str | None = None
+        self._preset_params = preset_params or ExportDialog._session_params
         self._build_ui(last_fmt)
 
     # ===================================================================
@@ -96,12 +106,17 @@ class ExportDialog(QDialog):
         phl = QHBoxLayout(path_row)
         phl.setContentsMargins(0, 0, 0, 0)
         self._path_edit = QLineEdit(self._default_path)
+        if self._preset_params and self._preset_params.get("path"):
+            self._path_edit.setText(self._preset_params.get("path"))
         phl.addWidget(self._path_edit)
         browse_btn = QPushButton("…")
         browse_btn.setFixedWidth(30)
         browse_btn.clicked.connect(self._browse)
         phl.addWidget(browse_btn)
         pfl.addRow("Path:", path_row)
+        self._overwrite_cb = QCheckBox("Overwrite output file")
+        self._overwrite_cb.setChecked(self._overwrite)
+        pfl.addRow("", self._overwrite_cb)
         root.addWidget(path_group)
 
         # ---- Format -----------------------------------------------
@@ -212,6 +227,10 @@ class ExportDialog(QDialog):
         self._transp_cb.setChecked(self._transparent_bg)
         root.addWidget(self._transp_cb)
 
+        # Apply preset parameters if provided (session or project)
+        if self._preset_params:
+            self._apply_preset(self._preset_params)
+
         # ---- Buttons ----------------------------------------------
         btns = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok |
@@ -293,11 +312,36 @@ class ExportDialog(QDialog):
         path = self._path_edit.text().strip()
         if not path:
             return
+        ExportDialog._overwrite_default = self._overwrite_cb.isChecked()
+        self._requested_path = path
+        if self._overwrite_cb.isChecked():
+            final_path = Path(path)
+        else:
+            final_path = self._unique_path(Path(path))
+        self._final_path = str(final_path)
         # Persist settings
-        self._qs.setValue(_KEY_LAST_DIR, str(Path(path).parent))
+        self._qs.setValue(_KEY_LAST_DIR, str(final_path.parent))
         self._qs.setValue(_KEY_FORMAT, self._fmt_combo.currentText())
+        session_params = self.get_params()
+        # Store the user-requested path so the dialog reopens without suffixes
+        session_params["requested_path"] = self._requested_path
+        session_params["path"] = self._requested_path or session_params["path"]
+        ExportDialog._session_params = session_params
         self.accept()
 
+    def _unique_path(self, base: Path) -> Path:
+        """Return a non-existing path by appending (1), (2), ... if needed."""
+        if not base.exists():
+            return base
+        stem = base.stem
+        suffix = base.suffix
+        parent = base.parent
+        idx = 1
+        while True:
+            candidate = parent / f"{stem} ({idx}){suffix}"
+            if not candidate.exists():
+                return candidate
+            idx += 1
     # ===================================================================
     # Public result
     # ===================================================================
@@ -306,7 +350,8 @@ class ExportDialog(QDialog):
         """Return a dict with all export parameters."""
         fmt = self._fmt_combo.currentText()
         params: dict = {
-            "path":         self._path_edit.text().strip(),
+            "path":         self._final_path,
+            "requested_path": self._requested_path or self._path_edit.text().strip(),
             "format":       fmt,
             "width":        self._w_spin.value(),
             "height":       self._h_spin.value(),
@@ -325,6 +370,55 @@ class ExportDialog(QDialog):
             params["quality"]  = self._jxl_q_spin.value()
             params["lossless"] = self._jxl_lossless.isChecked()
         return params
+
+    def _apply_preset(self, params: dict) -> None:
+        self._updating = True
+        fmt = params.get("format")
+        if fmt and fmt in self.FORMATS:
+            self._fmt_combo.setCurrentText(fmt)
+        w = params.get("width")
+        h = params.get("height")
+        if isinstance(w, int) and w > 0:
+            self._set_width_px(w)
+        elif isinstance(h, int) and h > 0:
+            self._set_height_px(h)
+        transp = params.get("transparent")
+        if isinstance(transp, bool):
+            self._transp_cb.setChecked(transp)
+
+        # Format-specific
+        if fmt == "JPEG":
+            q = params.get("quality")
+            if isinstance(q, int):
+                self._jpeg_q_spin.setValue(max(1, min(100, q)))
+        elif fmt == "PNG":
+            comp = params.get("compress_level")
+            if isinstance(comp, int):
+                self._png_comp.setValue(max(0, min(9, comp)))
+        elif fmt == "WebP":
+            q = params.get("quality")
+            if isinstance(q, int):
+                self._webp_q_spin.setValue(max(1, min(100, q)))
+            lossless = params.get("lossless")
+            if isinstance(lossless, bool):
+                self._webp_lossless.setChecked(lossless)
+        elif fmt == "TIFF":
+            comp = params.get("compression")
+            if isinstance(comp, str) and comp in ("none", "lzw", "deflate", "packbits"):
+                self._tiff_comp.setCurrentText(comp)
+        elif fmt == "JPEG XL":
+            q = params.get("quality")
+            if isinstance(q, int):
+                self._jxl_q_spin.setValue(max(1, min(100, q)))
+            lossless = params.get("lossless")
+            if isinstance(lossless, bool):
+                self._jxl_lossless.setChecked(lossless)
+
+        # Path override
+        path_for_ui = params.get("requested_path") or params.get("path")
+        if path_for_ui:
+            self._path_edit.setText(path_for_ui)
+        self._updating = False
 
 
 # ---------------------------------------------------------------------------
