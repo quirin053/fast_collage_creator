@@ -25,8 +25,8 @@ a = Analysis(
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 _icon = (
-    "icons/icon_01.ico"   if sys.platform == "win32"  else
-    "icons/icon_01.icns"  if sys.platform == "darwin" else
+    "icons/icon.ico"   if sys.platform == "win32"  else
+    "icons/icon.icns"  if sys.platform == "darwin" else
     None
 )
 
@@ -52,7 +52,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="FastCollageCreator.app",
-        icon="icons/icon_01.icns",
+        icon="icons/icon.icns",
         bundle_identifier="com.quirin053.fastcollagecreator",
         info_plist={
             "NSHighResolutionCapable": True,

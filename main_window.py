@@ -12,9 +12,11 @@ Layout:
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QSettings
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QFileDialog, QMainWindow, QMessageBox,
     QSplitter, QVBoxLayout, QWidget,
@@ -31,6 +33,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Fast Collage Creator")
         self.resize(1400, 860)
+        self._apply_window_icon()
         self._settings = QSettings("FastCollageCreator", "MainWindow")
         self._project_path: str | None = None
         self._project_dir: str | None = None
@@ -237,6 +240,12 @@ class MainWindow(QMainWindow):
             self.setWindowTitle(f"Fast Collage Creator - {name}")
         else:
             self.setWindowTitle("Fast Collage Creator")
+
+    def _apply_window_icon(self) -> None:
+        base_dir = Path(__file__).resolve().parent
+        icon_path = base_dir / "icons" / ("icon.icns" if sys.platform == "darwin" else "icon.ico")
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
 
     def _project_start_dir(self) -> str:
         if self._project_dir and Path(self._project_dir).is_dir():

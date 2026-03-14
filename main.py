@@ -2,9 +2,11 @@
 Entry point for Fast Collage Creator.
 """
 import sys
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
 
 from main_window import MainWindow
 
@@ -16,6 +18,12 @@ def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("Fast Collage Creator")
     app.setStyle("Fusion")
+
+    # App icon
+    base_dir = Path(__file__).resolve().parent
+    icon_path = base_dir / "icons" / ("icon.icns" if sys.platform == "darwin" else "icon.ico")
+    if icon_path.exists():
+        app.setWindowIcon(QIcon(str(icon_path)))
 
     # Dark palette
     from PySide6.QtGui import QColor, QPalette
@@ -35,7 +43,7 @@ def main() -> None:
     app.setPalette(palette)
 
     window = MainWindow()
-    window.show()
+    window.showMaximized()
     sys.exit(app.exec())
 
 
